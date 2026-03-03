@@ -7,6 +7,7 @@ export class InputController {
   private pointerX = 0;
   private leftPressed = false;
   private rightPressed = false;
+  private pointerControlActive = true;
 
   constructor(private readonly stage: Container, initialWidth: number, initialHeight: number) {
     this.pointerX = initialWidth * 0.5;
@@ -34,6 +35,11 @@ export class InputController {
     return left + right;
   }
 
+  /** True when pointer/mouse is the active control source. */
+  isPointerControlActive(): boolean {
+    return this.pointerControlActive;
+  }
+
   destroy(): void {
     this.stage.off("pointermove", this.onPointerMove);
     this.stage.off("pointerdown", this.onPointerMove);
@@ -43,14 +49,17 @@ export class InputController {
 
   private readonly onPointerMove = (event: FederatedPointerEvent): void => {
     this.pointerX = event.global.x;
+    this.pointerControlActive = true;
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.code === "ArrowLeft" || event.code === "KeyA") {
       this.leftPressed = true;
+      this.pointerControlActive = false;
     }
     if (event.code === "ArrowRight" || event.code === "KeyD") {
       this.rightPressed = true;
+      this.pointerControlActive = false;
     }
   };
 

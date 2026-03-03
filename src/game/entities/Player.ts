@@ -20,11 +20,12 @@ export class Player extends Container {
   }
 
   /** Move the player within horizontal bounds. */
-  update(deltaSeconds: number, inputAxis: number, width: number): void {
+  update(deltaSeconds: number, inputAxis: number, width: number, pointerControlActive: boolean): void {
     const manualTarget = this.x + inputAxis * this.speed * deltaSeconds;
     const pointerTarget = this.pointerX;
-    const desiredX = inputAxis === 0 ? pointerTarget : manualTarget;
-    const smoothing = inputAxis === 0 ? 1 - Math.exp(-16 * deltaSeconds) : 1;
+    const shouldFollowPointer = pointerControlActive && inputAxis === 0;
+    const desiredX = shouldFollowPointer ? pointerTarget : manualTarget;
+    const smoothing = shouldFollowPointer ? 1 - Math.exp(-16 * deltaSeconds) : 1;
 
     this.x += (desiredX - this.x) * smoothing;
     this.x = clamp(this.x, this.radius + 24, width - this.radius - 24);

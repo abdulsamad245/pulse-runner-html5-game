@@ -1,11 +1,11 @@
 import { Container, Graphics, Text } from "pixi.js";
 import { ObjectPool } from "../../core/ObjectPool";
 import { Scene } from "../../core/Scene";
-import { FallingObject, type FallingKind } from "../entities/FallingObject";
+import { FallingObject, type FallingKind, type FallingMotionOptions } from "../entities/FallingObject";
 import { Player } from "../entities/Player";
 import { GAME_CONFIG } from "../config";
 import { InputController } from "../input/InputController";
-import { distanceSquared, randomRange } from "../math";
+import { clamp, distanceSquared, randomRange } from "../math";
 import type { DifficultySnapshot } from "../services/DifficultyService";
 import { Hud } from "../ui/Hud";
 import { TextButton } from "../ui/TextButton";
@@ -97,12 +97,13 @@ export class PlayScene extends Scene {
 
   private elapsed = 0;
   private spawnTimer = 0.5;
-  private lives = GAME_CONFIG.baseLives;
+  private lives: number = GAME_CONFIG.baseLives;
   private score = 0;
   private combo = 0;
   private invulnerabilityTimer = 0;
   private shieldTimer = 0;
   private frenzyTimer = 0;
+  private slowFieldTimer = 0;
   private nearMissSfxCooldown = 0;
   private flashAlpha = 0;
   private levelFlashAlpha = 0;
@@ -153,6 +154,9 @@ export class PlayScene extends Scene {
     this.player.y = this.game.height * GAME_CONFIG.playerYRatio;
 
     this.input = new InputController(this.game.app.stage, this.game.width, this.game.height);
+    this.game.services.sound.startGameplayLoop();
+    this.game.services.sound.setGameplayPaused(false);
+    this.game.services.sound.setGameplayIntensity(0);
 
     this.hud.updateValues(0, this.lives, 0, "");
     this.hud.resize(this.game.width);
@@ -166,6 +170,7 @@ export class PlayScene extends Scene {
     this.pauseMenuButton.off("pointertap", this.onPauseMenuPressed);
     this.input?.destroy();
     this.input = null;
+    this.game.services.sound.stopGameplayLoop();
     this.recycleAllObjects();
     this.clearParticles();
   }
@@ -194,10 +199,12 @@ export class PlayScene extends Scene {
 
   update(deltaSeconds: number): void {
     if (this.paused) {
+      this.game.services.sound.setGameplayPaused(true);
       this.pulsePauseOverlay(deltaSeconds);
       this.hud.updateValues(Math.floor(this.score), this.lives, this.elapsed, `LVL ${this.level} | PAUSED`);
       return;
     }
+    this.game.services.sound.setGameplayPaused(false);
 
     this.elapsed += deltaSeconds;
 
@@ -208,6 +215,8 @@ export class PlayScene extends Scene {
       this.level = difficulty.level;
     }
     const frenzyMultiplier = this.frenzyTimer > 0 ? 1.7 : 1;
+    const ambienceIntensity = Math.min(1, difficulty.ramp * 0.82 + (this.frenzyTimer > 0 ? 0.18 : 0));
+    this.game.services.sound.setGameplayIntensity(ambienceIntensity);
     this.score += deltaSeconds * 5 * difficulty.scoreMultiplier * frenzyMultiplier;
 
     this.updateInput(deltaSeconds);
@@ -224,6 +233,7 @@ export class PlayScene extends Scene {
     this.invulnerabilityTimer = Math.max(0, this.invulnerabilityTimer - deltaSeconds);
     this.shieldTimer = Math.max(0, this.shieldTimer - deltaSeconds);
     this.frenzyTimer = Math.max(0, this.frenzyTimer - deltaSeconds);
+    this.slowFieldTimer = Math.max(0, this.slowFieldTimer - deltaSeconds);
     this.player.setInvulnerable(this.invulnerabilityTimer > 0);
 
     this.flashAlpha = Math.max(0, this.flashAlpha - deltaSeconds * 2.4);
@@ -241,16 +251,18 @@ export class PlayScene extends Scene {
   private updateInput(deltaSeconds: number): void {
     const pointerX = this.input?.getPointerX() ?? this.widthPx * 0.5;
     const axis = this.input?.getHorizontalAxis() ?? 0;
+    const pointerControlActive = this.input?.isPointerControlActive() ?? false;
 
     this.player.setPointerX(pointerX);
-    this.player.update(deltaSeconds, axis, this.widthPx);
+    this.player.update(deltaSeconds, axis, this.widthPx, pointerControlActive);
   }
 
   private spawnLoop(deltaSeconds: number, difficulty: DifficultySnapshot): void {
     this.spawnTimer -= deltaSeconds;
+    const activeCap = this.getActiveObjectCap(difficulty.level);
 
     // Catch up if a frame took longer than expected while respecting active object caps.
-    while (this.spawnTimer <= 0 && this.activeObjects.length < GAME_CONFIG.maxActiveObjects) {
+    while (this.spawnTimer <= 0 && this.activeObjects.length < activeCap) {
       this.spawnObject(difficulty);
       this.spawnTimer += difficulty.spawnInterval * randomRange(0.85, 1.15);
     }
@@ -258,61 +270,140 @@ export class PlayScene extends Scene {
 
   private spawnObject(difficulty: DifficultySnapshot): void {
     const object = this.pool.acquire();
-    const roll = Math.random();
-    const boostChance = 0.08;
-    const kind: FallingKind =
-      roll < difficulty.enemyWeight ? "enemy" : roll < difficulty.enemyWeight + boostChance ? "boost" : "energy";
-    const x = randomRange(GAME_CONFIG.horizontalPadding, this.widthPx - GAME_CONFIG.horizontalPadding);
-    const speed = difficulty.fallSpeed * randomRange(0.86, 1.14);
+    const kind = this.pickSpawnKind(difficulty);
+    const motion = this.buildMotionForKind(kind, difficulty.level);
+    const amplitudePad = Math.max(0, motion.driftAmplitude ?? 0);
+    const sidePad = GAME_CONFIG.horizontalPadding + 16 + amplitudePad;
+    const minX = sidePad;
+    const maxX = this.widthPx - sidePad;
+    const x = minX < maxX ? randomRange(minX, maxX) : this.widthPx * 0.5;
+    const speed = this.resolveSpawnSpeed(kind, difficulty);
 
-    object.configure(kind, x, GAME_CONFIG.spawnTopOffset, speed);
+    object.configure(kind, x, GAME_CONFIG.spawnTopOffset, speed, motion);
     this.activeObjects.push(object);
     this.actorLayer.addChild(object);
   }
 
+  private getActiveObjectCap(level: number): number {
+    return GAME_CONFIG.maxActiveObjects + Math.min(18, Math.max(0, level - 1) * 3);
+  }
+
+  private pickSpawnKind(difficulty: DifficultySnapshot): FallingKind {
+    const level = difficulty.level;
+    const mineWeight = level >= 3 ? Math.min(0.1, 0.05 + (level - 3) * 0.01) : 0;
+    const dartWeight = level >= 4 ? Math.min(0.18, 0.06 + (level - 4) * 0.015) : 0;
+    const boostWeight = 0.075;
+    const shieldWeight = level >= 5 ? Math.min(0.095, 0.04 + (level - 5) * 0.008) : 0;
+    const slowWeight = level >= 6 ? Math.min(0.075, 0.03 + (level - 6) * 0.006) : 0;
+
+    const enemyWeight = clamp(difficulty.enemyWeight, 0.5, 0.9);
+    const pool = [
+      { kind: "enemy", weight: enemyWeight },
+      { kind: "mine", weight: mineWeight },
+      { kind: "dart", weight: dartWeight },
+      { kind: "boost", weight: boostWeight },
+      { kind: "shield", weight: shieldWeight },
+      { kind: "slow", weight: slowWeight }
+    ] as const;
+
+    const fixedWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    const energyWeight = Math.max(0.16, 1.18 - fixedWeight);
+    const allWeights = [...pool, { kind: "energy", weight: energyWeight }] as const;
+    const total = allWeights.reduce((sum, entry) => sum + entry.weight, 0);
+    const roll = Math.random() * total;
+    let cursor = 0;
+
+    for (const entry of allWeights) {
+      cursor += entry.weight;
+      if (roll <= cursor) {
+        return entry.kind;
+      }
+    }
+
+    return "energy";
+  }
+
+  private buildMotionForKind(kind: FallingKind, level: number): FallingMotionOptions {
+    switch (kind) {
+      case "enemy":
+        return {
+          spinSpeed: randomRange(-0.9, 0.9)
+        };
+      case "mine":
+        return {
+          spinSpeed: randomRange(-0.3, 0.3),
+          driftAmplitude: level >= 7 ? randomRange(16, 38) : 0,
+          driftFrequency: level >= 7 ? randomRange(1.6, 2.4) : 0,
+          driftPhase: Math.random() * Math.PI * 2
+        };
+      case "dart":
+        return {
+          lateralVelocity: randomRange(-70, 70),
+          driftAmplitude: randomRange(24, 52),
+          driftFrequency: randomRange(2.1, 3.6),
+          driftPhase: Math.random() * Math.PI * 2,
+          spinSpeed: randomRange(-2.5, 2.5),
+          initialRotation: randomRange(-0.45, 0.45)
+        };
+      case "energy":
+        return {
+          spinSpeed: randomRange(-1.6, 1.6)
+        };
+      case "boost":
+        return {
+          spinSpeed: randomRange(-2.2, 2.2)
+        };
+      case "shield":
+        return {
+          spinSpeed: randomRange(-1.3, 1.3)
+        };
+      case "slow":
+        return {
+          spinSpeed: randomRange(-1.2, 1.2)
+        };
+    }
+  }
+
+  private resolveSpawnSpeed(kind: FallingKind, difficulty: DifficultySnapshot): number {
+    const base = difficulty.fallSpeed;
+    switch (kind) {
+      case "mine":
+        return base * randomRange(0.66, 0.84);
+      case "dart":
+        return base * randomRange(1.2, 1.48);
+      case "energy":
+      case "shield":
+      case "slow":
+        return base * randomRange(0.82, 1.02);
+      case "boost":
+        return base * randomRange(0.78, 0.98);
+      case "enemy":
+      default:
+        return base * randomRange(0.9, 1.18);
+    }
+  }
+
   private updateObjects(deltaSeconds: number, difficulty: DifficultySnapshot): boolean {
     const frenzyMultiplier = this.frenzyTimer > 0 ? 1.7 : 1;
+    const slowFieldMultiplier = this.slowFieldTimer > 0 ? 0.58 : 1;
 
     for (let i = this.activeObjects.length - 1; i >= 0; i -= 1) {
       const object = this.activeObjects[i];
-      object.tick(deltaSeconds);
+      const isHazard = this.isHazardKind(object.kind);
+      object.tick(deltaSeconds, isHazard ? slowFieldMultiplier : 1);
 
       const collides =
         distanceSquared(this.player.x, this.player.y, object.x, object.y) <
         (this.player.radius + object.radius) ** 2;
 
       if (collides) {
-        if (object.kind === "enemy") {
-          if (this.shieldTimer > 0) {
-            this.score += 25 * difficulty.scoreMultiplier * frenzyMultiplier;
-            this.emitBurst(object.x, object.y, 0x7db8ff, 10);
-            this.game.services.sound.play("shieldBlock");
-          } else if (this.invulnerabilityTimer <= 0) {
-            this.lives -= 1;
-            this.combo = 0;
-            this.invulnerabilityTimer = 0.9;
-            this.flashAlpha = 0.38;
-            this.emitBurst(object.x, object.y, 0xff5a7a, 9);
-            this.game.services.sound.play("hit");
-            if (this.lives <= 0) {
-              this.finishRun();
-              return true;
-            }
+        if (isHazard) {
+          const didFinish = this.applyHazardCollision(object, difficulty, frenzyMultiplier);
+          if (didFinish) {
+            return true;
           }
         } else {
-          if (object.kind === "boost") {
-            this.shieldTimer = Math.min(8, this.shieldTimer + 4.5);
-            this.frenzyTimer = Math.min(8, this.frenzyTimer + 4.5);
-            this.score += 36 * difficulty.scoreMultiplier * frenzyMultiplier;
-            this.emitBurst(object.x, object.y, 0x7db8ff, 11);
-            this.game.services.sound.play("boost");
-          } else {
-            this.combo = Math.min(9, this.combo + 1);
-            this.score +=
-              18 * difficulty.scoreMultiplier * frenzyMultiplier * (1 + this.combo * 0.15);
-            this.emitBurst(object.x, object.y, 0xffdc7c, 8);
-            this.game.services.sound.play("collect");
-          }
+          this.applyBonusCollision(object, difficulty, frenzyMultiplier);
         }
 
         this.recycleAtIndex(i);
@@ -320,7 +411,7 @@ export class PlayScene extends Scene {
       }
 
       if (
-        object.kind === "enemy" &&
+        isHazard &&
         !object.nearMissAwarded &&
         object.y > this.player.y - 10 &&
         Math.abs(object.x - this.player.x) < this.player.radius + object.radius + 8
@@ -336,8 +427,10 @@ export class PlayScene extends Scene {
         }
       }
 
-      if (object.y - object.radius > this.heightPx + 36) {
-        if (object.kind !== "enemy") {
+      const outBottom = object.y - object.radius > this.heightPx + 36;
+      const outSides = object.x + object.radius < -48 || object.x - object.radius > this.widthPx + 48;
+      if (outBottom || outSides) {
+        if (!isHazard) {
           this.combo = 0;
         }
         this.recycleAtIndex(i);
@@ -345,6 +438,82 @@ export class PlayScene extends Scene {
     }
 
     return false;
+  }
+
+  private isHazardKind(kind: FallingKind): boolean {
+    return kind === "enemy" || kind === "mine" || kind === "dart";
+  }
+
+  private applyHazardCollision(
+    object: FallingObject,
+    difficulty: DifficultySnapshot,
+    frenzyMultiplier: number
+  ): boolean {
+    if (this.shieldTimer > 0) {
+      const shieldBonus = object.kind === "mine" ? 42 : object.kind === "dart" ? 32 : 25;
+      this.score += shieldBonus * difficulty.scoreMultiplier * frenzyMultiplier;
+      this.emitBurst(object.x, object.y, 0x7db8ff, object.kind === "mine" ? 14 : 10);
+      this.game.services.sound.play("shieldBlock");
+      return false;
+    }
+
+    if (this.invulnerabilityTimer > 0) {
+      return false;
+    }
+
+    const damage = object.kind === "mine" ? 2 : 1;
+    const hitFlash = object.kind === "mine" ? 0.52 : object.kind === "dart" ? 0.44 : 0.38;
+    const invulnerability = object.kind === "dart" ? 0.75 : object.kind === "mine" ? 1.05 : 0.9;
+    const burstColor = object.kind === "mine" ? 0xff355a : object.kind === "dart" ? 0xff855f : 0xff5a7a;
+    const burstCount = object.kind === "mine" ? 14 : object.kind === "dart" ? 11 : 9;
+
+    this.lives = Math.max(0, this.lives - damage);
+    this.combo = 0;
+    this.invulnerabilityTimer = invulnerability;
+    this.flashAlpha = hitFlash;
+    this.emitBurst(object.x, object.y, burstColor, burstCount);
+    this.game.services.sound.play("hit");
+
+    if (this.lives <= 0) {
+      this.finishRun();
+      return true;
+    }
+
+    return false;
+  }
+
+  private applyBonusCollision(
+    object: FallingObject,
+    difficulty: DifficultySnapshot,
+    frenzyMultiplier: number
+  ): void {
+    switch (object.kind) {
+      case "boost":
+        this.shieldTimer = Math.min(10, this.shieldTimer + 4.5);
+        this.frenzyTimer = Math.min(10, this.frenzyTimer + 4.5);
+        this.score += 40 * difficulty.scoreMultiplier * frenzyMultiplier;
+        this.emitBurst(object.x, object.y, 0x7db8ff, 11);
+        this.game.services.sound.play("boost");
+        return;
+      case "shield":
+        this.shieldTimer = Math.min(12, this.shieldTimer + 5.5);
+        this.score += 30 * difficulty.scoreMultiplier * frenzyMultiplier;
+        this.emitBurst(object.x, object.y, 0x79d6ff, 10);
+        this.game.services.sound.play("boost");
+        return;
+      case "slow":
+        this.slowFieldTimer = Math.min(9, this.slowFieldTimer + 4.8);
+        this.score += 28 * difficulty.scoreMultiplier * frenzyMultiplier;
+        this.emitBurst(object.x, object.y, 0x72fff2, 10);
+        this.game.services.sound.play("collect");
+        return;
+      case "energy":
+      default:
+        this.combo = Math.min(9, this.combo + 1);
+        this.score += 18 * difficulty.scoreMultiplier * frenzyMultiplier * (1 + this.combo * 0.15);
+        this.emitBurst(object.x, object.y, 0xffdc7c, 8);
+        this.game.services.sound.play("collect");
+    }
   }
 
   private finishRun(): void {
@@ -359,6 +528,7 @@ export class PlayScene extends Scene {
       platform: this.game.services.platform.name,
       dateISO: new Date().toISOString()
     });
+    this.game.services.sound.stopGameplayLoop();
     this.game.services.sound.play("gameOver");
     void this.game.services.platform.reportScore(finalScore);
 
@@ -492,12 +662,18 @@ export class PlayScene extends Scene {
   private renderFlashOverlay(): void {
     this.flashOverlay.clear();
     if (this.flashAlpha <= 0) {
-      if (this.frenzyTimer <= 0) {
+      const frenzyActive = this.frenzyTimer > 0;
+      const slowFieldActive = this.slowFieldTimer > 0;
+      if (!frenzyActive && !slowFieldActive) {
         return;
       }
+
+      const color = frenzyActive && slowFieldActive ? 0x6fb9ff : frenzyActive ? 0x5f8bff : 0x6eece1;
+      const alphaBase = frenzyActive ? 0.06 : 0.05;
+      const alphaPulse = frenzyActive ? 0.02 : 0.015;
       this.flashOverlay.rect(0, 0, this.widthPx, this.heightPx).fill({
-        color: 0x5f8bff,
-        alpha: 0.06 + Math.sin(this.elapsed * 7) * 0.02
+        color,
+        alpha: alphaBase + Math.sin(this.elapsed * 7) * alphaPulse
       });
       return;
     }
@@ -533,14 +709,19 @@ export class PlayScene extends Scene {
 
   private resolveStatusText(level: number): string {
     const prefix = `LVL ${level}`;
-    if (this.shieldTimer > 0 && this.frenzyTimer > 0) {
-      return `${prefix} | SHIELD ${this.shieldTimer.toFixed(1)}s | FRENZY ${this.frenzyTimer.toFixed(1)}s`;
-    }
+    const statuses: string[] = [];
+
     if (this.shieldTimer > 0) {
-      return `${prefix} | SHIELD ${this.shieldTimer.toFixed(1)}s`;
+      statuses.push(`SHIELD ${this.shieldTimer.toFixed(1)}s`);
     }
     if (this.frenzyTimer > 0) {
-      return `${prefix} | FRENZY ${this.frenzyTimer.toFixed(1)}s`;
+      statuses.push(`FRENZY ${this.frenzyTimer.toFixed(1)}s`);
+    }
+    if (this.slowFieldTimer > 0) {
+      statuses.push(`SLOW FIELD ${this.slowFieldTimer.toFixed(1)}s`);
+    }
+    if (statuses.length > 0) {
+      return `${prefix} | ${statuses.join(" | ")}`;
     }
     return this.combo >= 2 ? `${prefix} | CHAIN BONUS x${this.combo}` : prefix;
   }
@@ -582,6 +763,7 @@ export class PlayScene extends Scene {
     this.resumeButton.visible = next;
     this.pauseMenuButton.visible = next;
     this.pauseButton.visible = !next;
+    this.game.services.sound.setGameplayPaused(next);
 
     this.game.services.sound.play(next ? "pause" : "resume");
   }
