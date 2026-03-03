@@ -8,7 +8,8 @@ export type FallingKind =
   | "energy"
   | "boost"
   | "shield"
-  | "slow";
+  | "slow"
+  | "life";
 
 /** Optional motion tuning applied per spawned object kind. */
 export interface FallingMotionOptions {
@@ -27,6 +28,7 @@ export class FallingObject extends Container {
   speed = 180;
   nearMissAwarded = false;
 
+  private readonly aura = new Graphics();
   private readonly body = new Graphics();
   private age = 0;
   private baseX = 0;
@@ -38,7 +40,7 @@ export class FallingObject extends Container {
 
   constructor() {
     super();
-    this.addChild(this.body);
+    this.addChild(this.aura, this.body);
   }
 
   /** Configure the visual type and motion values before activation. */
@@ -58,6 +60,7 @@ export class FallingObject extends Container {
     this.driftPhase = motion.driftPhase ?? 0;
     this.spinSpeed = motion.spinSpeed ?? 0;
     this.rotation = motion.initialRotation ?? 0;
+    this.scale.set(1);
     this.draw();
   }
 
@@ -75,6 +78,8 @@ export class FallingObject extends Container {
     if (this.spinSpeed !== 0) {
       this.rotation += this.spinSpeed * deltaSeconds;
     }
+
+    this.animateVisuals();
   }
 
   /** Reset runtime state when returned to the object pool. */
@@ -89,9 +94,11 @@ export class FallingObject extends Container {
     this.driftPhase = 0;
     this.spinSpeed = 0;
     this.rotation = 0;
+    this.scale.set(1);
   }
 
   private draw(): void {
+    this.aura.clear();
     this.body.clear();
 
     if (this.kind === "enemy") {
@@ -100,29 +107,28 @@ export class FallingObject extends Container {
         .star(0, 0, this.radius, this.radius * 0.62, 6, -Math.PI / 2)
         .fill(0xff5a7a)
         .stroke({ color: 0xff9db1, width: 2, alpha: 0.85 });
+      this.body.circle(0, 0, 4.2).fill({ color: 0xfff0f3, alpha: 0.9 });
       return;
     }
 
     if (this.kind === "mine") {
       this.radius = 24;
       this.body
-        .poly([
-          0,
-          -this.radius,
-          this.radius * 0.74,
-          -this.radius * 0.38,
-          this.radius * 0.95,
-          this.radius * 0.28,
-          0,
-          this.radius,
-          -this.radius * 0.95,
-          this.radius * 0.28,
-          -this.radius * 0.74,
-          -this.radius * 0.38
-        ])
+        .circle(0, 0, this.radius * 0.68)
         .fill(0xb51634)
         .stroke({ color: 0xff8aa1, width: 2, alpha: 0.9 });
-      this.body.circle(0, 0, 6).fill(0xffc5d1);
+      for (let i = 0; i < 8; i += 1) {
+        const angle = (i / 8) * Math.PI * 2 + Math.PI / 8;
+        const innerX = Math.cos(angle) * (this.radius * 0.62);
+        const innerY = Math.sin(angle) * (this.radius * 0.62);
+        const outerX = Math.cos(angle) * this.radius;
+        const outerY = Math.sin(angle) * this.radius;
+        this.body
+          .moveTo(innerX, innerY)
+          .lineTo(outerX, outerY)
+          .stroke({ color: 0xffa1b3, width: 2, alpha: 0.84 });
+      }
+      this.body.circle(0, 0, 6).fill({ color: 0xffd5de, alpha: 0.95 });
       return;
     }
 
@@ -141,6 +147,9 @@ export class FallingObject extends Container {
         ])
         .fill(0xff7154)
         .stroke({ color: 0xffc2b8, width: 2, alpha: 0.88 });
+      this.body
+        .poly([0, this.radius * 0.2, 0, this.radius * 1.42, this.radius * 0.38, this.radius * 1.1, -this.radius * 0.38, this.radius * 1.1])
+        .fill({ color: 0xffd0c4, alpha: 0.85 });
       return;
     }
 
@@ -149,21 +158,64 @@ export class FallingObject extends Container {
       this.body
         .poly([
           0,
-          -this.radius,
-          this.radius * 0.72,
+          -this.radius * 1.15,
+          this.radius * 0.55,
+          -this.radius * 0.44,
+          this.radius * 0.84,
+          this.radius * 0.12,
           0,
-          0,
-          this.radius,
-          -this.radius * 0.72,
-          0
+          this.radius * 0.18,
+          -this.radius * 0.84,
+          this.radius * 0.12,
+          -this.radius * 0.55,
+          -this.radius * 0.44
         ])
-        .fill(0xffdc7c)
-        .stroke({ color: 0xfff1c5, width: 2, alpha: 0.85 });
+        .fill(0xf6b95f)
+        .stroke({ color: 0xffe3a2, width: 2, alpha: 0.92 });
+      this.body
+        .poly([
+          0,
+          -this.radius * 0.76,
+          this.radius * 0.28,
+          -this.radius * 0.22,
+          0,
+          this.radius * 0.44,
+          -this.radius * 0.28,
+          -this.radius * 0.22
+        ])
+        .fill({ color: 0xfff4d1, alpha: 0.75 });
+      this.body
+        .poly([
+          0,
+          -this.radius * 0.98,
+          this.radius * 0.3,
+          -this.radius * 0.22,
+          -this.radius * 0.3,
+          -this.radius * 0.22
+        ])
+        .fill({ color: 0xffffff, alpha: 0.34 });
+      this.body
+        .poly([0, -this.radius * 1.22, this.radius * 0.08, -this.radius * 1.02, -this.radius * 0.08, -this.radius * 1.02])
+        .fill({ color: 0xffffff, alpha: 0.9 });
+      return;
+    }
+
+    if (this.kind === "boost") {
+      this.radius = 15;
+      this.drawAura(0x7db8ff, 25, 0.2);
+      this.body
+        .roundRect(-13, -13, 26, 26, 9)
+        .fill(0x6faeff)
+        .stroke({ color: 0xd8edff, width: 2, alpha: 0.92 });
+      this.body
+        .poly([-4, -8, 2, -8, -1, -1, 6, -1, -4, 9, -1, 2, -7, 2])
+        .fill({ color: 0xffffff, alpha: 0.94 });
       return;
     }
 
     if (this.kind === "shield") {
       this.radius = 15;
+      this.drawAura(0x79d7ff, 24, 0.2);
       this.body
         .poly([
           0,
@@ -187,6 +239,7 @@ export class FallingObject extends Container {
 
     if (this.kind === "slow") {
       this.radius = 13;
+      this.drawAura(0x73fff0, 23, 0.19);
       this.body
         .circle(0, 0, this.radius)
         .fill(0x73fff0)
@@ -202,6 +255,26 @@ export class FallingObject extends Container {
       return;
     }
 
+    if (this.kind === "life") {
+      this.radius = 13;
+      this.drawAura(0xff7ea0, 24, 0.2);
+      this.body
+        .circle(-5, -3, 7.2)
+        .fill(0xff6c8f)
+        .circle(5, -3, 7.2)
+        .fill(0xff6c8f)
+        .poly([0, 13, -11, 0, 11, 0])
+        .fill(0xff6c8f)
+        .stroke({ color: 0xffd2df, width: 2, alpha: 0.85 });
+      this.body
+        .rect(-1.5, -7, 3, 14)
+        .fill({ color: 0xffffff, alpha: 0.88 });
+      this.body
+        .rect(-7, -1.5, 14, 3)
+        .fill({ color: 0xffffff, alpha: 0.88 });
+      return;
+    }
+
     this.radius = 15;
     this.body
       .circle(0, 0, this.radius)
@@ -210,5 +283,24 @@ export class FallingObject extends Container {
     this.body
       .poly([0, -10, 8, 0, 0, 10, -8, 0])
       .fill(0xffffff);
+  }
+
+  private drawAura(color: number, radius: number, alpha: number): void {
+    this.aura.circle(0, 0, radius).fill({ color, alpha });
+  }
+
+  private animateVisuals(): void {
+    const pulseFast = Math.sin(this.age * 8 + this.driftPhase);
+    const pulseSlow = Math.sin(this.age * 4 + this.driftPhase);
+    const isHazard = this.kind === "enemy" || this.kind === "mine" || this.kind === "dart";
+
+    if (isHazard) {
+      this.scale.set(1 + pulseFast * 0.028);
+      this.aura.alpha = 0.9 + pulseSlow * 0.12;
+      return;
+    }
+
+    this.scale.set(1 + pulseFast * 0.055);
+    this.aura.alpha = 0.94 + pulseSlow * 0.16;
   }
 }

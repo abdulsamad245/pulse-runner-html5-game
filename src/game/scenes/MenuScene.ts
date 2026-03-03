@@ -190,8 +190,14 @@ export class MenuScene extends Scene {
       }
 
       row.alpha = 1;
-      const tag = entry.name.toUpperCase().slice(0, 10).padEnd(10, " ");
-      row.text = `${i + 1}. ${tag}  ${entry.score.toString().padStart(6, "0")}`;
+      const compact = this.widthPx < 760 || this.heightPx < 640;
+      const tag = entry.name
+        .toUpperCase()
+        .slice(0, compact ? 7 : 10)
+        .padEnd(compact ? 7 : 10, " ");
+      row.text = `${i + 1}. ${tag} ${entry.score.toString().padStart(6, "0")} L${entry.levelReached
+        .toString()
+        .padStart(2, "0")}`;
     }
   }
 

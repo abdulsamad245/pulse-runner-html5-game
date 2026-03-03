@@ -1,12 +1,24 @@
 /** Named procedural SFX cues used by gameplay/UI flows. */
 export type SoundEvent =
   | "uiTap"
+  | "nameSaved"
   | "collect"
+  | "collectEnergy"
+  | "collectBoost"
+  | "collectShield"
+  | "collectSlow"
+  | "collectLife"
   | "boost"
   | "levelUp"
   | "nearMiss"
   | "hit"
+  | "hitEnemy"
+  | "hitMine"
+  | "hitDart"
   | "shieldBlock"
+  | "blockEnemy"
+  | "blockMine"
+  | "blockDart"
   | "pause"
   | "resume"
   | "gameOver";
@@ -172,17 +184,41 @@ export class SoundService {
         this.toneSweep(950, 700, 0.05, 0.012, "sine", now + 0.015, 0.2);
         this.noiseBurst(0.03, 0.004, now, 0.1, 1800, 14000);
         return;
+      case "nameSaved":
+        this.tone(720, 0.08, 0.017, "triangle", now, 0);
+        this.tone(1040, 0.07, 0.013, "sine", now + 0.05, 0.1);
+        this.noiseBurst(0.03, 0.0038, now + 0.01, 0, 2000, 14000);
+        return;
       case "collect":
+      case "collectEnergy":
         this.tone(760, 0.07, 0.018, "triangle", now, -0.15);
         this.tone(1140, 0.09, 0.014, "sine", now + 0.03, 0.18);
         this.tone(1520, 0.08, 0.01, "sine", now + 0.06, 0.28);
         this.noiseBurst(0.045, 0.0035, now + 0.01, 0.22, 2500, 16000);
         return;
+      case "collectBoost":
       case "boost":
         this.toneSweep(260, 680, 0.16, 0.024, "sawtooth", now, -0.15);
         this.tone(980, 0.14, 0.02, "square", now + 0.09, 0.2);
         this.tone(490, 0.22, 0.014, "triangle", now + 0.02, 0);
         this.noiseBurst(0.09, 0.006, now + 0.06, 0.12, 1200, 9000);
+        return;
+      case "collectShield":
+        this.tone(420, 0.1, 0.02, "square", now, -0.15);
+        this.tone(620, 0.11, 0.017, "triangle", now + 0.06, 0.08);
+        this.tone(860, 0.1, 0.013, "sine", now + 0.12, 0.2);
+        this.noiseBurst(0.06, 0.0048, now + 0.02, 0.1, 1000, 9000);
+        return;
+      case "collectSlow":
+        this.toneSweep(780, 460, 0.14, 0.018, "triangle", now, -0.2);
+        this.tone(360, 0.12, 0.013, "sine", now + 0.08, 0.05);
+        this.noiseBurst(0.06, 0.0045, now + 0.02, -0.08, 900, 6000);
+        return;
+      case "collectLife":
+        this.tone(560, 0.09, 0.018, "triangle", now, -0.12);
+        this.tone(880, 0.09, 0.015, "triangle", now + 0.06, 0);
+        this.tone(1240, 0.1, 0.013, "sine", now + 0.12, 0.16);
+        this.noiseBurst(0.07, 0.005, now + 0.04, 0.08, 1800, 12000);
         return;
       case "levelUp":
         this.tone(520, 0.09, 0.018, "triangle", now, -0.2);
@@ -196,15 +232,37 @@ export class SoundService {
         this.toneSweep(1100, 720, 0.08, 0.013, "square", now, 0.3);
         this.noiseBurst(0.05, 0.0045, now, -0.2, 2500, 15000);
         return;
+      case "blockEnemy":
       case "shieldBlock":
         this.tone(260, 0.08, 0.02, "square", now, -0.1);
         this.toneSweep(680, 420, 0.09, 0.015, "triangle", now + 0.015, 0.12);
         this.noiseBurst(0.05, 0.004, now + 0.01, 0, 1200, 7000);
         return;
+      case "blockMine":
+        this.tone(220, 0.11, 0.022, "square", now, -0.2);
+        this.toneSweep(520, 280, 0.11, 0.018, "triangle", now + 0.02, 0.15);
+        this.noiseBurst(0.065, 0.0055, now + 0.005, 0, 700, 5000);
+        return;
+      case "blockDart":
+        this.tone(360, 0.07, 0.018, "triangle", now, 0.25);
+        this.toneSweep(980, 660, 0.08, 0.014, "sawtooth", now + 0.015, -0.12);
+        this.noiseBurst(0.045, 0.0046, now, 0.15, 1500, 11000);
+        return;
+      case "hitEnemy":
       case "hit":
         this.tone(150, 0.22, 0.032, "sawtooth", now, -0.1);
         this.tone(95, 0.26, 0.02, "sine", now + 0.04, 0);
         this.noiseBurst(0.12, 0.007, now, 0.06, 400, 4500);
+        return;
+      case "hitMine":
+        this.tone(132, 0.28, 0.034, "sawtooth", now, -0.08);
+        this.tone(78, 0.34, 0.022, "square", now + 0.05, 0.05);
+        this.noiseBurst(0.16, 0.0082, now, 0.02, 260, 3600);
+        return;
+      case "hitDart":
+        this.toneSweep(460, 220, 0.17, 0.024, "square", now, 0.3);
+        this.tone(120, 0.22, 0.018, "sine", now + 0.05, -0.15);
+        this.noiseBurst(0.1, 0.0065, now + 0.01, -0.2, 600, 6200);
         return;
       case "pause":
         this.tone(450, 0.08, 0.016, "triangle", now, 0);

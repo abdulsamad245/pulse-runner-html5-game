@@ -285,35 +285,22 @@ export class PlayScene extends Scene {
   }
 
   private getActiveObjectCap(level: number): number {
-    return GAME_CONFIG.maxActiveObjects + Math.min(18, Math.max(0, level - 1) * 3);
+    if (level <= 2) {
+      return GAME_CONFIG.maxActiveObjects - 9 + (level - 1) * 2;
+    }
+    if (level <= 4) {
+      return GAME_CONFIG.maxActiveObjects - 3 + (level - 3) * 3;
+    }
+    return GAME_CONFIG.maxActiveObjects + 3 + Math.min(28, (level - 5) * 4);
   }
 
   private pickSpawnKind(difficulty: DifficultySnapshot): FallingKind {
-    const level = difficulty.level;
-    const mineWeight = level >= 3 ? Math.min(0.1, 0.05 + (level - 3) * 0.01) : 0;
-    const dartWeight = level >= 4 ? Math.min(0.18, 0.06 + (level - 4) * 0.015) : 0;
-    const boostWeight = 0.075;
-    const shieldWeight = level >= 5 ? Math.min(0.095, 0.04 + (level - 5) * 0.008) : 0;
-    const slowWeight = level >= 6 ? Math.min(0.075, 0.03 + (level - 6) * 0.006) : 0;
-
-    const enemyWeight = clamp(difficulty.enemyWeight, 0.5, 0.9);
-    const pool = [
-      { kind: "enemy", weight: enemyWeight },
-      { kind: "mine", weight: mineWeight },
-      { kind: "dart", weight: dartWeight },
-      { kind: "boost", weight: boostWeight },
-      { kind: "shield", weight: shieldWeight },
-      { kind: "slow", weight: slowWeight }
-    ] as const;
-
-    const fixedWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
-    const energyWeight = Math.max(0.16, 1.18 - fixedWeight);
-    const allWeights = [...pool, { kind: "energy", weight: energyWeight }] as const;
-    const total = allWeights.reduce((sum, entry) => sum + entry.weight, 0);
+    const weights = this.buildSpawnWeights(difficulty.level, difficulty.enemyWeight);
+    const total = weights.reduce((sum, entry) => sum + entry.weight, 0);
     const roll = Math.random() * total;
     let cursor = 0;
 
-    for (const entry of allWeights) {
+    for (const entry of weights) {
       cursor += entry.weight;
       if (roll <= cursor) {
         return entry.kind;
@@ -323,63 +310,121 @@ export class PlayScene extends Scene {
     return "energy";
   }
 
+  private buildSpawnWeights(level: number, enemyBaseWeight: number): ReadonlyArray<{ kind: FallingKind; weight: number }> {
+    // Softer onboarding up to level 4, then escalate hazard density from level 5 onward.
+    const spikeRamp = clamp((level - 5) / 5, 0, 1);
+    const earlyEase = clamp((5 - level) / 4, 0, 1);
+    const enemyWeight = clamp(enemyBaseWeight * (0.68 + spikeRamp * 0.3 - earlyEase * 0.11), 0.34, 0.9);
+    const mineWeight = level < 4 ? 0 : clamp(0.024 + (level - 4) * 0.014 + spikeRamp * 0.04, 0.024, 0.16);
+    const dartWeight = level < 5 ? 0 : clamp(0.06 + (level - 5) * 0.02 + spikeRamp * 0.07, 0.06, 0.26);
+    const boostWeight = clamp(level < 5 ? 0.112 - (level - 1) * 0.008 : 0.066 - spikeRamp * 0.01, 0.046, 0.112);
+    const shieldWeight = clamp(level < 5 ? 0.088 - (level - 1) * 0.01 : 0.046 - spikeRamp * 0.012, 0.028, 0.088);
+    const slowWeight = clamp(level < 4 ? 0.028 : level < 7 ? 0.038 : 0.048 - spikeRamp * 0.01, 0.026, 0.048);
+    const lifeWeight =
+      this.lives >= 5
+        ? 0
+        : this.lives < GAME_CONFIG.baseLives
+          ? clamp(0.034 - spikeRamp * 0.008, 0.02, 0.034)
+          : this.lives === 4
+            ? clamp(0.008 - spikeRamp * 0.003, 0.003, 0.008)
+            : clamp(level < 5 ? 0.011 : 0.007, 0.004, 0.011);
+    const energyWeight = clamp(level < 5 ? 0.39 - (level - 1) * 0.05 : 0.22 - spikeRamp * 0.07, 0.12, 0.39);
+
+    return [
+      { kind: "enemy", weight: enemyWeight },
+      { kind: "mine", weight: mineWeight },
+      { kind: "dart", weight: dartWeight },
+      { kind: "boost", weight: boostWeight },
+      { kind: "shield", weight: shieldWeight },
+      { kind: "slow", weight: slowWeight },
+      { kind: "life", weight: lifeWeight },
+      { kind: "energy", weight: energyWeight }
+    ];
+  }
+
   private buildMotionForKind(kind: FallingKind, level: number): FallingMotionOptions {
+    const spikeRamp = clamp((level - 5) / 6, 0, 1);
+
     switch (kind) {
       case "enemy":
         return {
-          spinSpeed: randomRange(-0.9, 0.9)
+          spinSpeed: randomRange(-0.9, 0.9),
+          driftAmplitude: level >= 6 ? randomRange(8, 24) : 0,
+          driftFrequency: level >= 6 ? randomRange(1.2, 2.2) : 0,
+          driftPhase: Math.random() * Math.PI * 2
         };
       case "mine":
         return {
-          spinSpeed: randomRange(-0.3, 0.3),
-          driftAmplitude: level >= 7 ? randomRange(16, 38) : 0,
-          driftFrequency: level >= 7 ? randomRange(1.6, 2.4) : 0,
+          spinSpeed: randomRange(-0.34, 0.34),
+          driftAmplitude: level >= 5 ? randomRange(12 + spikeRamp * 10, 28 + spikeRamp * 16) : 0,
+          driftFrequency: level >= 5 ? randomRange(1.4, 2.6 + spikeRamp * 0.6) : 0,
           driftPhase: Math.random() * Math.PI * 2
         };
       case "dart":
-        return {
-          lateralVelocity: randomRange(-70, 70),
-          driftAmplitude: randomRange(24, 52),
-          driftFrequency: randomRange(2.1, 3.6),
-          driftPhase: Math.random() * Math.PI * 2,
-          spinSpeed: randomRange(-2.5, 2.5),
-          initialRotation: randomRange(-0.45, 0.45)
-        };
+        {
+          const lateralScale = 1 + spikeRamp * 0.9;
+          return {
+            lateralVelocity: randomRange(-42, 42) * lateralScale,
+            driftAmplitude: randomRange(16 + spikeRamp * 14, 34 + spikeRamp * 26),
+            driftFrequency: randomRange(1.9, 3.2 + spikeRamp * 0.9),
+            driftPhase: Math.random() * Math.PI * 2,
+            spinSpeed: randomRange(-2.4, 2.4),
+            initialRotation: randomRange(-0.45, 0.45)
+          };
+        }
       case "energy":
         return {
-          spinSpeed: randomRange(-1.6, 1.6)
+          spinSpeed: randomRange(-1.3, 1.3),
+          driftAmplitude: randomRange(4, 10),
+          driftFrequency: randomRange(1.8, 2.6),
+          driftPhase: Math.random() * Math.PI * 2,
+          initialRotation: randomRange(-0.2, 0.2)
         };
       case "boost":
         return {
-          spinSpeed: randomRange(-2.2, 2.2)
+          spinSpeed: randomRange(-2, 2),
+          driftAmplitude: randomRange(6, 16),
+          driftFrequency: randomRange(1.6, 2.4),
+          driftPhase: Math.random() * Math.PI * 2
         };
       case "shield":
         return {
-          spinSpeed: randomRange(-1.3, 1.3)
+          spinSpeed: randomRange(-1.2, 1.2)
         };
       case "slow":
         return {
-          spinSpeed: randomRange(-1.2, 1.2)
+          spinSpeed: randomRange(-1, 1)
+        };
+      case "life":
+        return {
+          spinSpeed: randomRange(-1.1, 1.1),
+          driftAmplitude: randomRange(8, 22),
+          driftFrequency: randomRange(1.5, 2.4),
+          driftPhase: Math.random() * Math.PI * 2
         };
     }
   }
 
   private resolveSpawnSpeed(kind: FallingKind, difficulty: DifficultySnapshot): number {
     const base = difficulty.fallSpeed;
+    const level = difficulty.level;
+    const spikeRamp = clamp((level - 5) / 5, 0, 1);
+
     switch (kind) {
       case "mine":
-        return base * randomRange(0.66, 0.84);
+        return base * randomRange(0.64 + spikeRamp * 0.06, 0.83 + spikeRamp * 0.1);
       case "dart":
-        return base * randomRange(1.2, 1.48);
+        return base * randomRange(1.08 + spikeRamp * 0.18, 1.3 + spikeRamp * 0.28);
       case "energy":
       case "shield":
       case "slow":
-        return base * randomRange(0.82, 1.02);
+      case "life":
+        return base * randomRange(0.8, 0.98 + spikeRamp * 0.06);
       case "boost":
-        return base * randomRange(0.78, 0.98);
+        return base * randomRange(0.75, 0.94 + spikeRamp * 0.04);
       case "enemy":
       default:
-        return base * randomRange(0.9, 1.18);
+        return base * randomRange(0.82 + spikeRamp * 0.12, 1.08 + spikeRamp * 0.16);
     }
   }
 
@@ -453,7 +498,9 @@ export class PlayScene extends Scene {
       const shieldBonus = object.kind === "mine" ? 42 : object.kind === "dart" ? 32 : 25;
       this.score += shieldBonus * difficulty.scoreMultiplier * frenzyMultiplier;
       this.emitBurst(object.x, object.y, 0x7db8ff, object.kind === "mine" ? 14 : 10);
-      this.game.services.sound.play("shieldBlock");
+      this.game.services.sound.play(
+        object.kind === "mine" ? "blockMine" : object.kind === "dart" ? "blockDart" : "blockEnemy"
+      );
       return false;
     }
 
@@ -461,18 +508,21 @@ export class PlayScene extends Scene {
       return false;
     }
 
-    const damage = object.kind === "mine" ? 2 : 1;
-    const hitFlash = object.kind === "mine" ? 0.52 : object.kind === "dart" ? 0.44 : 0.38;
-    const invulnerability = object.kind === "dart" ? 0.75 : object.kind === "mine" ? 1.05 : 0.9;
+    const damage = 1;
+    const hitFlash = object.kind === "mine" ? 0.48 : object.kind === "dart" ? 0.4 : 0.34;
+    const invulnerability = object.kind === "dart" ? 1.25 : object.kind === "mine" ? 1.6 : 1.4;
     const burstColor = object.kind === "mine" ? 0xff355a : object.kind === "dart" ? 0xff855f : 0xff5a7a;
     const burstCount = object.kind === "mine" ? 14 : object.kind === "dart" ? 11 : 9;
 
     this.lives = Math.max(0, this.lives - damage);
     this.combo = 0;
     this.invulnerabilityTimer = invulnerability;
+    this.slowFieldTimer = Math.max(this.slowFieldTimer, 1.6);
     this.flashAlpha = hitFlash;
     this.emitBurst(object.x, object.y, burstColor, burstCount);
-    this.game.services.sound.play("hit");
+    this.game.services.sound.play(
+      object.kind === "mine" ? "hitMine" : object.kind === "dart" ? "hitDart" : "hitEnemy"
+    );
 
     if (this.lives <= 0) {
       this.finishRun();
@@ -493,26 +543,32 @@ export class PlayScene extends Scene {
         this.frenzyTimer = Math.min(10, this.frenzyTimer + 4.5);
         this.score += 40 * difficulty.scoreMultiplier * frenzyMultiplier;
         this.emitBurst(object.x, object.y, 0x7db8ff, 11);
-        this.game.services.sound.play("boost");
+        this.game.services.sound.play("collectBoost");
         return;
       case "shield":
         this.shieldTimer = Math.min(12, this.shieldTimer + 5.5);
         this.score += 30 * difficulty.scoreMultiplier * frenzyMultiplier;
         this.emitBurst(object.x, object.y, 0x79d6ff, 10);
-        this.game.services.sound.play("boost");
+        this.game.services.sound.play("collectShield");
         return;
       case "slow":
         this.slowFieldTimer = Math.min(9, this.slowFieldTimer + 4.8);
         this.score += 28 * difficulty.scoreMultiplier * frenzyMultiplier;
         this.emitBurst(object.x, object.y, 0x72fff2, 10);
-        this.game.services.sound.play("collect");
+        this.game.services.sound.play("collectSlow");
+        return;
+      case "life":
+        this.lives = Math.min(5, this.lives + 1);
+        this.score += 34 * difficulty.scoreMultiplier * frenzyMultiplier;
+        this.emitBurst(object.x, object.y, 0x8effa8, 12);
+        this.game.services.sound.play("collectLife");
         return;
       case "energy":
       default:
         this.combo = Math.min(9, this.combo + 1);
         this.score += 18 * difficulty.scoreMultiplier * frenzyMultiplier * (1 + this.combo * 0.15);
         this.emitBurst(object.x, object.y, 0xffdc7c, 8);
-        this.game.services.sound.play("collect");
+        this.game.services.sound.play("collectEnergy");
     }
   }
 
@@ -520,11 +576,19 @@ export class PlayScene extends Scene {
     const finalScore = Math.floor(this.score);
     const best = Math.max(finalScore, Math.floor(this.game.services.storage.getNumber("highScore", 0)));
     this.game.services.storage.setNumber("highScore", best);
-    const playerName = this.game.services.platform.getUserDisplayName();
+    const defaultPlayerName = this.resolveFallbackPlayerName();
+    const preferredName = this.game.services.storage.getObject<string>("playerAlias", "");
+    const playerName = preferredName.trim() || defaultPlayerName;
+    const runId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
     const leaderboard = this.game.services.leaderboard.record({
+      runId,
       name: playerName,
       score: finalScore,
       survivalTime: this.elapsed,
+      levelReached: this.level,
       platform: this.game.services.platform.name,
       dateISO: new Date().toISOString()
     });
@@ -537,10 +601,30 @@ export class PlayScene extends Scene {
         score: finalScore,
         bestScore: best,
         survivalTime: this.elapsed,
+        levelReached: this.level,
+        runId,
+        defaultPlayerName,
         leaderboard: leaderboard.slice(0, 5),
         playerName
       })
     );
+  }
+
+  private resolveFallbackPlayerName(): string {
+    const platformName = this.game.services.platform.getUserDisplayName().trim();
+    if (platformName && platformName.toLowerCase() !== "player") {
+      return platformName;
+    }
+
+    const key = "anonPlayerName";
+    const existing = this.game.services.storage.getObject<string>(key, "").trim();
+    if (existing) {
+      return existing;
+    }
+
+    const generated = `Player-${Math.floor(1000 + Math.random() * 9000)}`;
+    this.game.services.storage.setObject(key, generated);
+    return generated;
   }
 
   private updateStars(deltaSeconds: number, difficulty: DifficultySnapshot): void {
